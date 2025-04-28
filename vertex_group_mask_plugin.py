@@ -1,9 +1,9 @@
 bl_info = {
     "name": "Mask by vertex group",
-    "blender": (4, 0, 0),
+    "blender": (3, 6, 0),
     "category": "Object",
     "version": (0, 0, 1),
-    "author": "Wojciech Michna",
+    "author": "Wojciech Michna, VikingUnleashed",
     "description": "A Blender plugin that applies a mask based on vertex groups in sculpt mode, allowing for targeted sculpting on specific areas of the model.",
 }
 
@@ -18,6 +18,10 @@ def mask_by_group_tab_function(vertex_group_name):
     if obj is None or obj.type != 'MESH':
         print("No valid mesh object selected.")
         return
+
+    # Ensure the object is in Sculpt Mode (since we're dealing with sculpt masks)
+    if obj.mode != 'SCULPT':
+        bpy.ops.object.mode_set(mode='SCULPT')
 
     # Get the vertex group by name
     vgroup = obj.vertex_groups.get(vertex_group_name)
@@ -34,17 +38,31 @@ def mask_by_group_tab_function(vertex_group_name):
             if group.group == vgroup.index:
                 vertex_indices.append(vert.index)  # Add the vertex index to the list
 
+    # Use bmesh to modify the mesh
     bm = bmesh.new()
     bm.from_mesh(obj.data)
 
-    mask_layer = bm.verts.layers.paint_mask.verify()
+    mask_layer = None
+    if bpy.app.version < (4, 1, 0):
+        # https://docs.blender.org/api/4.0/bmesh.types.html#bmesh.types.BMLayerAccessVert.paint_mask
+        mask_layer = bm.verts.layers.paint_mask.verify()
+    else:
+        # https://docs.blender.org/api/4.1/bpy.types.Mesh.html#bpy.types.Mesh.use_paint_mask
+        # Access or create the sculpt mask layer as a float attribute
+        mask_layer = bm.verts.layers.float.get(".sculpt_mask")  # Blender 4.4 uses this name for sculpt masks
+        if not mask_layer:
+            mask_layer = bm.verts.layers.float.new(".sculpt_mask")  # Create it if it doesn't exist
+
     bm.verts.ensure_lookup_table()
 
+    # Set the mask value for the vertices in the vertex group
     mask_value = 1.0
     for idx in np.array(vertex_indices, dtype=np.int64):
         bm.verts[idx][mask_layer] = mask_value
 
+    # Write the changes back to the mesh
     bm.to_mesh(obj.data)
+    bm.free()  # Free the bmesh to avoid memory leaks
 
     # Update the object and force a redraw
     obj.data.update()  # Update the mesh data
